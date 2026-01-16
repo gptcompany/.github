@@ -1,0 +1,121 @@
+# Enterprise AI Code Review using Claude Code Headless
+# Organization: gptcompany
+#
+# USAGE in any repo:
+#   jobs:
+#     ai-review:
+#       uses: gptcompany/.github/.github/workflows/_reusable-ai-review.yml@main
+#       with:
+#         review-focus: "security,performance,patterns"
+
+name: AI Code Review (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      review-focus:
+        description: 'Review focus areas (comma-separated)'
+        required: false
+        default: 'security,logic,patterns'
+        type: string
+      max-files:
+        description: 'Maximum files to review'
+        required: false
+        default: '20'
+        type: string
+
+jobs:
+  claude-review:
+    name: "Claude Code Review"
+    runs-on: [self-hosted, shared]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR context
+        id: context
+        run: |
+          # Get changed files
+          FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only | head -${{ inputs.max-files }})
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Get diff (limited to 500 lines for context)
+          DIFF=$(gh pr diff ${{ github.event.pull_request.number }} | head -500)
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Get PR title
+          TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q '.title')
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Claude Code Review
+        id: review
+        run: |
+          # Build review prompt
+          PROMPT="You are reviewing PR #${{ github.event.pull_request.number }}: ${{ steps.context.outputs.title }}
+
+          Focus areas: ${{ inputs.review-focus }}
+
+          Changed files:
+          ${{ steps.context.outputs.files }}
+
+          Diff (first 500 lines):
+          ${{ steps.context.outputs.diff }}
+
+          Provide a code review with:
+          1. **Summary** (2-3 sentences describing the changes)
+          2. **Issues Found** (list with severity: CRITICAL/HIGH/MEDIUM/LOW)
+          3. **Suggestions** (improvements, not blocking)
+          4. **Verdict**: APPROVE / REQUEST_CHANGES / COMMENT
+
+          Format as GitHub-flavored markdown. Be concise and actionable."
+
+          # Run Claude Code in headless mode (uses Claude Max subscription)
+          REVIEW=$(claude --print "$PROMPT" 2>&1 || echo "## Review Failed\n\nCould not generate review. Please check Claude Code installation on runner.")
+
+          # Save review to file
+          echo "$REVIEW" > review_output.md
+
+          # Set output (truncated to 60k chars for GitHub)
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          head -c 60000 review_output.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        if: contains(steps.review.outputs.review, '##')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const review = `${{ steps.review.outputs.review }}`;
+
+            // Only post if we have actual review content
+            if (review && review.length > 100 && !review.includes('Review Failed')) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## AI Code Review (Claude Code)
+
+            ${review}
+
+            ---
+            *Automated review by Claude Code - please verify suggestions before applying*`
+              });
+            }
+
+      - name: Upload review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-pr-${{ github.event.pull_request.number }}
+          path: review_output.md
+          retention-days: 30
