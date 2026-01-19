@@ -18,9 +18,9 @@ on:
         type: string
         default: 'auto'
       create-project:
-        description: 'Create GitHub Project board if missing'
+        description: 'Create GitHub Project board if missing (requires PAT, not GITHUB_TOKEN)'
         type: boolean
-        default: true
+        default: false
       sync-todos:
         description: 'Also sync todos from .planning/todos/'
         type: boolean
