@@ -39,17 +39,11 @@ jobs:
       - name: Get PR context
         id: context
         run: |
-          # Get changed files
-          FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only | head -${{ inputs.max-files }})
-          echo "files<<EOF" >> $GITHUB_OUTPUT
-          echo "$FILES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Get changed files (save to file to avoid shell escaping issues)
+          gh pr diff ${{ github.event.pull_request.number }} --name-only | head -${{ inputs.max-files }} > changed_files.txt
 
-          # Get diff (limited to 500 lines for context)
-          DIFF=$(gh pr diff ${{ github.event.pull_request.number }} | head -500)
-          echo "diff<<EOF" >> $GITHUB_OUTPUT
-          echo "$DIFF" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Get diff (save to file - avoids issues with parentheses and special chars)
+          gh pr diff ${{ github.event.pull_request.number }} | head -500 > diff.txt
 
           # Get PR title
           TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q '.title')
@@ -60,16 +54,25 @@ jobs:
       - name: Claude Code Review
         id: review
         run: |
-          # Build review prompt
-          PROMPT="You are reviewing PR #${{ github.event.pull_request.number }}: ${{ steps.context.outputs.title }}
+          # Build review prompt from files (avoids shell escaping issues with diff content)
+          cat > prompt.txt << 'PROMPT_EOF'
+          You are reviewing PR #${{ github.event.pull_request.number }}: ${{ steps.context.outputs.title }}
 
           Focus areas: ${{ inputs.review-focus }}
 
           Changed files:
-          ${{ steps.context.outputs.files }}
+          PROMPT_EOF
+
+          cat changed_files.txt >> prompt.txt
+
+          cat >> prompt.txt << 'PROMPT_EOF'
 
           Diff (first 500 lines):
-          ${{ steps.context.outputs.diff }}
+          PROMPT_EOF
+
+          cat diff.txt >> prompt.txt
+
+          cat >> prompt.txt << 'PROMPT_EOF'
 
           Provide a code review with:
           1. **Summary** (2-3 sentences describing the changes)
@@ -77,10 +80,13 @@ jobs:
           3. **Suggestions** (improvements, not blocking)
           4. **Verdict**: APPROVE / REQUEST_CHANGES / COMMENT
 
-          Format as GitHub-flavored markdown. Be concise and actionable."
+          Format as GitHub-flavored markdown. Be concise and actionable.
+          PROMPT_EOF
 
-          # Run Claude Code in headless mode (uses Claude Max subscription)
-          REVIEW=$(claude --print "$PROMPT" 2>&1 || echo "## Review Failed\n\nCould not generate review. Please check Claude Code installation on runner.")
+          # Run Claude Code in headless mode (reads prompt from file)
+          REVIEW=$(claude --print "$(cat prompt.txt)" 2>&1 || echo "## Review Failed
+
+          Could not generate review. Please check Claude Code installation on runner.")
 
           # Save review to file
           echo "$REVIEW" > review_output.md
