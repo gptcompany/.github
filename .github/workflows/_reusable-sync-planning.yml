@@ -18,13 +18,17 @@ on:
         type: string
         default: 'auto'
       create-project:
-        description: 'Create GitHub Project board if missing (requires PAT, not GITHUB_TOKEN)'
+        description: 'Create GitHub Project board if missing'
         type: boolean
         default: false
       sync-todos:
         description: 'Also sync todos from .planning/todos/'
         type: boolean
         default: false
+    secrets:
+      GH_PROJECT_PAT:
+        description: 'PAT with project permissions (optional)'
+        required: false
 
 jobs:
   sync:
@@ -66,7 +70,7 @@ jobs:
         if: steps.detect.outputs.framework == 'gsd'
         env:
           # Prefer PAT for project creation, fallback to GITHUB_TOKEN
-          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT || github.token }}
         run: |
           cd .github/scripts
           ARGS="--roadmap ../../.planning/ROADMAP.md --auto-project"
@@ -82,7 +86,7 @@ jobs:
         if: steps.detect.outputs.framework == 'speckit'
         env:
           # Prefer PAT for project creation, fallback to GITHUB_TOKEN
-          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT || github.token }}
         run: |
           cd .github/scripts
           ARGS="../../tasks.md --auto-project"
