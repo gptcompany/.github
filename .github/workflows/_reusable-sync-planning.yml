@@ -25,10 +25,6 @@ on:
         description: 'Also sync todos from .planning/todos/'
         type: boolean
         default: false
-    secrets:
-      GH_PROJECT_PAT:
-        description: 'PAT with project permissions (optional)'
-        required: false
 
 jobs:
   sync:
@@ -70,7 +66,7 @@ jobs:
         if: steps.detect.outputs.framework == 'gsd'
         env:
           # Prefer PAT for project creation, fallback to GITHUB_TOKEN
-          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           cd .github/scripts
           ARGS="--roadmap ../../.planning/ROADMAP.md --auto-project"
@@ -86,7 +82,7 @@ jobs:
         if: steps.detect.outputs.framework == 'speckit'
         env:
           # Prefer PAT for project creation, fallback to GITHUB_TOKEN
-          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           cd .github/scripts
           ARGS="../../tasks.md --auto-project"
