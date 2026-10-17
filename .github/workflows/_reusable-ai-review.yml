@@ -40,37 +40,32 @@ jobs:
         id: context
         run: |
           # Get changed files (save to file to avoid shell escaping issues)
-          gh pr diff ${{ github.event.pull_request.number }} --name-only | head -${{ inputs.max-files }} > changed_files.txt
+          gh pr diff "$PR_NUMBER" --name-only | head -n "$MAX_FILES" > changed_files.txt
 
           # Get diff (save to file - avoids issues with parentheses and special chars)
-          gh pr diff ${{ github.event.pull_request.number }} | head -500 > diff.txt
+          gh pr diff "$PR_NUMBER" | head -500 > diff.txt
 
-          # Get PR title
-          TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q '.title')
-          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          # PR title is attacker-controlled text: keep it in a file, never in an output
+          # or in the script body.
+          gh pr view "$PR_NUMBER" --json title -q '.title' > pr_title.txt
+        # Untrusted or caller-supplied values reach the shell only as environment variables.
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MAX_FILES: ${{ inputs.max-files }}
 
       - name: Claude Code Review
         id: review
         run: |
           # Build review prompt from files (avoids shell escaping issues with diff content)
-          cat > prompt.txt << 'PROMPT_EOF'
-          You are reviewing PR #${{ github.event.pull_request.number }}: ${{ steps.context.outputs.title }}
-
-          Focus areas: ${{ inputs.review-focus }}
-
-          Changed files:
-          PROMPT_EOF
-
-          cat changed_files.txt >> prompt.txt
-
-          cat >> prompt.txt << 'PROMPT_EOF'
-
-          Diff (first 500 lines):
-          PROMPT_EOF
-
-          cat diff.txt >> prompt.txt
+          {
+            printf 'You are reviewing PR #%s: ' "$PR_NUMBER"
+            cat pr_title.txt
+            printf '\nFocus areas: %s\n\nChanged files:\n' "$REVIEW_FOCUS"
+            cat changed_files.txt
+            printf '\nDiff (first 500 lines):\n'
+            cat diff.txt
+          } > prompt.txt
 
           cat >> prompt.txt << 'PROMPT_EOF'
 
@@ -91,17 +86,23 @@ jobs:
           # Save review to file
           echo "$REVIEW" > review_output.md
 
-          # Set output (truncated to 60k chars for GitHub)
-          echo "review<<EOF" >> $GITHUB_OUTPUT
-          head -c 60000 review_output.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # The model output is untrusted (it follows the PR diff): it travels in a file, never
+          # in a step output, which would be spliced into the next script or break the
+          # GITHUB_OUTPUT delimiter. Truncated to 60k bytes for GitHub.
+          head -c 60000 review_output.md > review_body.md
+          if grep -q '##' review_body.md; then
+            echo "has_review=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_FOCUS: ${{ inputs.review-focus }}
 
       - name: Post review comment
-        if: contains(steps.review.outputs.review, '##')
+        if: steps.review.outputs.has_review == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const review = `${{ steps.review.outputs.review }}`;
+            const review = require('fs').readFileSync('review_body.md', 'utf8');
 
             // Only post if we have actual review content
             if (review && review.length > 100 && !review.includes('Review Failed')) {
